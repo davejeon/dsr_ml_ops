@@ -1,0 +1,23 @@
+artifact_path: /home/davidjeon/side_quests/ml_ops/day1/Session_2/mlruns/0/models/m-90c51be151ae42c19f2b9b4462d51dba/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.12.3
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.9.0
+    skops_trusted_types: null
+mlflow_version: 3.13.0
+model_id: m-90c51be151ae42c19f2b9b4462d51dba
+model_size_bytes: 1563
+model_uuid: m-90c51be151ae42c19f2b9b4462d51dba
+prompts: null
+run_id: 1ed2db8d10a74d78b64daf209d5e64ce
+utc_time_created: '2026-06-04 13:23:54.051862'

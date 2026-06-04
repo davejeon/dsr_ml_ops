@@ -192,7 +192,7 @@ docker run --rm my-ml-project python -m src.pipeline.train
 
 ### 2.3 Project structure
 
-A common, opinionated layout (e.g. Cookiecutter Data Science):
+A common layout (e.g. Cookiecutter Data Science):
 
 ```
 project/
