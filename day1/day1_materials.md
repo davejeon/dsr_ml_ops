@@ -114,18 +114,81 @@ Discussion: **Where in this loop have your past projects broken down?**
 
 ### 2.1 The four pillars of reproducibility
 
-| Pillar | Tool examples |
-|--------|---------------|
-| Code | `git`, code review |
-| Environment | `venv`, `conda`, `pip-tools`, Docker |
-| Data | DVC, LakeFS, object storage with versioning |
-| Randomness | seeded RNGs, deterministic algorithms |
+| Pillar | Definition | Tool examples |
+|--------|------------|---------------|
+| **Code** | Every change to source code is tracked so you can pinpoint exactly which version produced a given result, review changes before merging, and roll back if needed. | `git`, code review (PRs/MRs) |
+| **Environment** | The exact set of software dependencies (Python version, library versions, system libraries) is captured and can be recreated identically on any machine. | `venv`, `conda`, `pip-tools`, Docker |
+| **Data** | The dataset used for training is versioned and addressable, so you can always re-run an experiment against the same snapshot of data that produced the original result. | DVC, LakeFS, S3 versioning |
+| **Randomness** | All sources of stochasticity (weight initialization, data shuffling, dropout, train/val splits) are controlled via fixed seeds so runs are deterministic given the same inputs. | seeded RNGs, deterministic algorithms |
+
+> **Why all four matter:** fixing only code but not data means you still can't reproduce yesterday's run if the upstream table was updated. Fixing all four means a colleague — or future you — can clone the repo, run one command, and get the same numbers.
 
 ### 2.2 Environment management
 
 - **Don't** rely on system Python.
 - **Do** pin versions: `pip freeze > requirements.txt` is a starting point; for stricter pinning use `pip-tools` or `uv`.
 - Containerize for "works the same anywhere" — see [Day 2, Module 5](../day2/day2_materials.md#module-5--packaging--serving-models).
+
+#### Tool comparison: venv vs conda vs pip-tools vs Docker
+
+| Tool | What it isolates | Manages Python itself? | Pin mechanism | Best for |
+|------|-----------------|----------------------|---------------|----------|
+| `venv` | Python packages only | No — uses whichever `python` you call it with | `requirements.txt` (manual or `pip freeze`) | Simple projects; already have the right Python version |
+| `conda` | Packages **and** Python version **and** C/system libraries | Yes — can install Python 3.9, 3.11, etc. per env | `environment.yml` | Data science; packages with complex C/CUDA deps (e.g. `numpy`, `torch`) |
+| `pip-tools` | Packages only (no Python, no system libs) | No | `requirements.in` → compiled `requirements.txt` with full hash-locked tree | Teams who need reproducible, auditable pip installs without conda overhead |
+| Docker | Everything — OS, system libs, Python, packages | Yes — the whole OS is frozen | `Dockerfile` + `requirements.txt` inside | Deployment; CI; sharing with people who aren't Python users |
+
+**Mental model:**
+
+```
+venv        — isolates pip packages from your system
+conda       — isolates pip packages + Python version + system libs
+pip-tools   — generates a fully-pinned, hash-verified pip lockfile
+Docker      — freezes the entire OS + runtime; nothing leaks in or out
+```
+
+**What is a pip lockfile?**
+
+A **lockfile** is a machine-generated file that records the *exact* version and cryptographic hash of every package (direct and transitive) that was installed at a known-good point in time.
+
+- Your `requirements.in` lists what you *care about* (e.g. `scikit-learn>=1.3`).
+- `pip-compile` resolves the full dependency tree — including scikit-learn's own deps (`numpy`, `scipy`, `joblib`, etc.) — and writes a `requirements.txt` that pins every single package to an exact version plus a SHA-256 hash:
+
+```
+scikit-learn==1.4.2 \
+    --hash=sha256:a3b4c... \
+    --hash=sha256:d5e6f...
+numpy==1.26.4 \
+    --hash=sha256:7a8b9...
+```
+
+- `pip-sync` installs *exactly* that set — nothing more, nothing less.
+
+The hash check means pip refuses to install a package if its contents don't match, protecting against supply-chain attacks (a malicious package swapped in at the same version number). This is stricter than a plain `pip freeze`, which pins versions but does not verify hashes.
+
+**Choosing in practice:**
+- Start with `venv` + `pip-tools` for pure-Python projects.
+- Reach for `conda` when you need a specific Python version or heavy C/CUDA dependencies.
+- Add Docker when you need to hand off to an environment you don't control (CI server, colleague's machine, production container).
+- `conda` + Docker is common in ML: conda resolves tricky deps, Docker guarantees the image is identical everywhere.
+
+```bash
+# venv
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# conda
+conda env create -f environment.yml
+conda activate my-env
+
+# pip-tools: compile then install
+pip-compile requirements.in        # writes requirements.txt with hashes
+pip-sync requirements.txt          # installs exactly that, nothing more
+
+# Docker
+docker build -t my-ml-project .
+docker run --rm my-ml-project python -m src.pipeline.train
+```
 
 ### 2.3 Project structure
 
