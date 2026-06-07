@@ -1,0 +1,41 @@
+# .dockerignore — placed at REPO ROOT (next to where you run docker build)
+#
+# Tells Docker which files to exclude when assembling the build context.
+# Without this, a 2 GB .venv/ is sent to the daemon on every build.
+
+# Python virtualenv (never needed inside the image)
+.venv/
+
+# Version control
+.git/
+.gitignore
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Jupyter artefacts
+*.ipynb
+.ipynb_checkpoints/
+
+# Airflow generated files
+day1/Session_5/airflow_home/logs/
+day1/Session_5/airflow_home/airflow.db
+day1/Session_5/airflow_home/airflow.cfg
+day1/Session_5/airflow_home/webserver_config.py
+
+# Documentation and markdown
+*.md
+README*
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Local data (the .joblib files in Session_1 ARE needed, so don't exclude them)
+*.csv
+*.db
+mlruns/
