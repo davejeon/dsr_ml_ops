@@ -145,7 +145,7 @@ There are changes in business objectives.
 - **Do** pin versions: `pip freeze > requirements.txt` is a starting point; for stricter pinning use `pip-tools` or `uv`.
 - Containerize for "works the same anywhere" — see [Day 2, Module 5](../day2/day2_materials.md#module-5--packaging--serving-models).
 
-#### Tool comparison: venv vs conda vs pip-tools vs Poetry vs Docker
+#### Tool comparison: venv vs conda vs pip-tools vs Poetry vs uv vs Docker
 
 | Tool | What it isolates | Manages Python itself? | Pin mechanism | Best for |
 |------|-----------------|----------------------|---------------|----------|
@@ -153,6 +153,7 @@ There are changes in business objectives.
 | `conda` | Packages **and** Python version **and** C/system libraries | Yes — can install Python 3.9, 3.11, etc. per env | `environment.yml` | Data science; packages with complex C/CUDA deps (e.g. `numpy`, `torch`) |
 | `pip-tools` | Packages only (no Python, no system libs) | No | `requirements.in` → compiled `requirements.txt` with full hash-locked tree | Teams who need reproducible, auditable pip installs without conda overhead |
 | `poetry` | Packages only (no Python, no system libs) | No (but integrates with `pyenv`) | `pyproject.toml` → `poetry.lock` (hashed) | Modern pure-Python projects; all-in-one dep management, venv, and packaging |
+| `uv` | Packages **and** Python version | Yes — can download and pin Python versions (`uv python install`) | `pyproject.toml` → `uv.lock` (hashed), or `requirements.in` → `requirements.txt` via `uv pip compile` | Fast, all-in-one Rust-based replacement for pip/pip-tools/venv/poetry; modern projects wanting speed and a single tool |
 | Docker | Everything — OS, system libs, Python, packages | Yes — the whole OS is frozen | `Dockerfile` + `requirements.txt` inside | Deployment; CI; sharing with people who aren't Python users |
 
 **Mental model:**
@@ -162,8 +163,11 @@ venv        — isolates pip packages from your system
 conda       — isolates pip packages + Python version + system libs
 pip-tools   — generates a fully-pinned, hash-verified pip lockfile
 poetry      — all-in-one: manages the venv + deps + lockfile + packaging
+uv          — all-in-one but Rust-fast: manages Python versions + venv + deps + lockfile + packaging
 Docker      — freezes the entire OS + runtime; nothing leaks in or out
 ```
+
+> **What is `uv`?** `uv` is a single, extremely fast (Rust-based) tool from Astral that aims to replace `pip`, `pip-tools`, `virtualenv`, and much of `poetry` in one binary. It is typically **10–100× faster** than pip thanks to a parallel resolver and a global content-addressed cache, can install and pin Python versions itself (so you don't need `pyenv` or `conda` just to switch Python), and produces a cross-platform, hash-verified `uv.lock`. It can run as a near drop-in for existing workflows (`uv pip install`, `uv pip compile`) or as a full project manager (`uv init`, `uv add`, `uv sync`, `uv run`). The main trade-off is that it is younger than the others, so the ecosystem and corporate tooling support are still catching up.
 
 **What is a pip lockfile?**
 
@@ -184,17 +188,20 @@ numpy==1.26.4 \
 
 The hash check means pip refuses to install a package if its contents don't match, protecting against supply-chain attacks (a malicious package swapped in at the same version number). This is stricter than a plain `pip freeze`, which pins versions but does not verify hashes.
 
-**Poetry vs pip-tools:** Both produce a hashed lockfile, but they differ in scope:
+> **`uv` and lockfiles:** `uv` produces the same kind of hash-verified lockfile two ways. As a pip-tools replacement, `uv pip compile requirements.in -o requirements.txt` emits the familiar pinned-and-hashed `requirements.txt` format. As a project manager, `uv lock` writes a `uv.lock` that — unlike `poetry.lock` — is **cross-platform** (it records the resolution for every target OS/Python in one file) and is resolved in a fraction of the time.
+
+**Poetry vs pip-tools vs uv:** All three can produce a hashed lockfile, but they differ in scope and speed:
 
 - **pip-tools** is just the compile/sync step — you manage the venv yourself and the format stays `requirements.txt`, which is universally understood.
 - **Poetry** is all-in-one: it creates and manages the venv, resolves deps, writes `poetry.lock`, *and* can build/publish packages (`poetry build`, `poetry publish`). The trade-off is a steeper learning curve and a `pyproject.toml`-only workflow that some CI tools handle less gracefully.
+- **uv** covers the same ground as both — it can act as a fast drop-in for pip-tools (`uv pip compile`/`uv pip sync`) *or* as a full Poetry-style project manager (`uv add`, `uv sync`, `uv build`, `uv publish`) — while also managing Python versions and running dramatically faster. Its main downside is maturity: it is the newest of the three.
 
-For ML projects, pip-tools is often preferred because the conda/Docker stack already handles the venv layer, so Poetry's extra tooling adds complexity without benefit. Poetry shines for pure-Python libraries or services where you also need to publish to PyPI.
+For ML projects, pip-tools is often preferred because the conda/Docker stack already handles the venv layer, so Poetry's extra tooling adds complexity without benefit. Poetry shines for pure-Python libraries or services where you also need to publish to PyPI. `uv` is increasingly the default first choice for new pure-Python projects: it collapses pip, pip-tools, venv, and much of Poetry into one fast tool, and its Docker-friendly speed makes CI builds noticeably quicker.
 
 **Choosing in practice:**
-- Start with `venv` + `pip-tools` for pure-Python projects where simplicity matters.
-- Use `poetry` when building a pure-Python library or service and you want one tool to handle deps, venv, and packaging.
-- Reach for `conda` when you need a specific Python version or heavy C/CUDA dependencies.
+- Start with `venv` + `pip-tools` for pure-Python projects where simplicity matters — or reach straight for `uv`, which gives you the same fully-pinned workflow with one faster tool.
+- Use `poetry` when building a pure-Python library or service and you want one tool to handle deps, venv, and packaging — or use `uv`, which now covers the same build/publish workflow with better speed and Python-version management.
+- Reach for `conda` when you need a specific Python version or heavy C/CUDA dependencies. (Note `uv` can install Python versions, but not arbitrary C/system libraries the way conda can.)
 - Add Docker when you need to hand off to an environment you don't control (CI server, colleague's machine, production container).
 - `conda` + Docker is common in ML: conda resolves tricky deps, Docker guarantees the image is identical everywhere.
 
@@ -215,6 +222,18 @@ pip-sync requirements.txt          # installs exactly that, nothing more
 poetry install                     # reads pyproject.toml, writes/respects poetry.lock
 poetry add scikit-learn            # adds dep, updates lock
 poetry run python -m src.train     # run inside managed venv
+
+# uv: drop-in pip-tools replacement
+uv venv                            # create .venv (auto-detected by later uv commands)
+uv pip compile requirements.in -o requirements.txt   # hash-locked, like pip-compile but faster
+uv pip sync requirements.txt       # install exactly that set
+
+# uv: full project manager (reads/writes pyproject.toml + uv.lock)
+uv init my-ml-project              # scaffold a project
+uv python install 3.11             # download & pin a Python version (no pyenv/conda needed)
+uv add scikit-learn                # add dep, update uv.lock
+uv sync                            # create venv + install exactly the locked deps
+uv run python -m src.train         # run inside the managed venv
 
 # Docker
 docker build -t my-ml-project .
@@ -319,12 +338,14 @@ Models are functions of **data + code + config**. If data changes silently, resu
 
 ### 4.2 Approaches
 
-| Approach | Tool | Trade-offs |
-|----------|------|------------|
-| Snapshots in object storage | S3 versioning | Simple, but no metadata |
-| Git-like data versioning | **DVC**, LakeFS | Diffs, branches, ties to git |
-| Data warehouse time travel | Snowflake, BigQuery, Delta Lake | Powerful, vendor-bound |
-| Feature stores | Feast, Tecton | Reuse + consistency train/serve |
+| Approach | Tool | How it versions | Pros | Cons | Best when |
+|----------|------|-----------------|------|------|-----------|
+| Snapshots in object storage | S3/GCS versioning, timestamped paths | Keeps a copy of each object version (by version ID or path) | Zero extra tooling; works with any file type; cheap | No diffing, no branches, no "why" metadata; retention is manual; hard to map runs → snapshots | You just need a quick, auditable copy of each dataset and have few experiments |
+| Git-like data versioning | **DVC**, LakeFS | Content-addressed hashes; a small pointer is committed to git while bytes live in a remote | Ties data version to the exact git commit; diffs, branches, `pull`/`push` workflow; reproducible by clone + one command | Extra CLI to install and learn; large-file rewrites are costly; `dvc pull` is separate from `git pull` | You want code and data versioned together with a familiar git mental model |
+| Data warehouse time travel | Snowflake, BigQuery, Delta Lake / Iceberg | Engine retains table history; query "as of" a timestamp or version | No extra tooling if you're already on the platform; query any historical state in SQL | Vendor-coupled syntax; retention window can expire (Snowflake Standard = 1 day); still must log which snapshot a run used | Your training data already lives in a warehouse/lakehouse and you query it with SQL |
+| Feature stores | Feast, Tecton | Versioned feature definitions + point-in-time correct joins | Eliminates train/serve skew; reuse features across models; consistent offline/online values | Highest operational cost; overkill for small projects | Multiple models share features, or you need low-latency online serving |
+
+> **How to choose:** move down the table as your needs grow. Most projects start with **object-storage snapshots** (or DVC), graduate to **warehouse time travel** once data lives centrally, and only reach for a **feature store** when feature reuse or online latency forces it. These approaches also compose — e.g. DVC for raw-file versioning *plus* a feature store for serving.
 
 #### Snapshots in object storage
 
