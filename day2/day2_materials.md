@@ -27,9 +27,31 @@ Common artifact formats:
 | Format | Notes |
 |--------|-------|
 | `pickle` / `joblib` | Easy in Python; security risk if deserializing untrusted files; tied to library versions. |
+Pickle is a module from the Python Standard Library. It can serialize any Python object, including custom Python classes and objects.
+
+joblib is more efficient than pickle when working with large machine learning models or large numpy arrays.
+
 | **ONNX** | Cross-framework, runtime-optimized inference. |
+ONNX is an open format built to represent machine learning models. ONNX defines a common set of operators - the building blocks of machine learning and deep learning models - and a common file format to enable AI devleopers to use models with a variety of frameworks, tools, runtimes, and compilers.
+
+It holds the architecture and parameters i.e. "weights". It makes it easy to move a model between frameworks.
+
 | **TorchScript** / SavedModel | Framework-native, production-grade. |
+
+A subset of Python that allows developers to create serializable, optimizable,  and production-ready models from PyTorch code.
+
+It enables executing deep learning models in high performance environments without requiring a Python runtime.
+
+Use when there are no Python dependencies, such as running models on mobile devices, edge computing platforms, or in C++ inference servers.
+
+Trims overheads associated with the Python interpreter, allowing for faster inference times and hardware-level optimisations.
+
+Saves entire model architectures, weights, and logic into a single .pt or .pth file.
+
+
 | **MLflow Model** | Wraps any of the above with metadata + signature. |
+
+
 
 ### 5.2 Model signature & schema
 

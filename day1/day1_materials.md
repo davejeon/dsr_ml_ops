@@ -38,6 +38,8 @@ It sits at the intersection of three disciplines:
 
 MLOps = **DevOps for ML**, plus everything DevOps doesn't cover (data, models, drift, experiments).
 
+It is an extension of the DevOps methodology to include Machine Learning and Data Science assets as first-class citizens within the DevOps ecology.
+
 ### 1.2 What is DevOps?
 
 **DevOps** is a set of practices that combines software **Dev**elopment and IT **Op**erations. Its goal is to shorten the development lifecycle and deliver software reliably and continuously. Core ideas include:
@@ -97,6 +99,20 @@ The **primary artifact** is the main deliverable of your workflow — in traditi
 ```
 
 Discussion: **Where in this loop have your past projects broken down?**
+
+Model performance can decay over time.
+e.g. Fraud detection - Assume that a model has been trained and it was deployed. After some time you notice that it gives you incorrect predictions:
+- Data
+- Changes in fraudster behaviour
+
+May need to collect data and retrain.
+
+May need to reformulate the problem as it gets difficult to collect the data required.
+
+Any violations of assumptions made during training.
+
+There are changes in business objectives.
+
 
 ### 1.6 MLOps Maturity Levels (Google)
 
