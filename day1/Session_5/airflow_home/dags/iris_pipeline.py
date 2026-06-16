@@ -5,6 +5,15 @@ import pathlib
 import warnings
 from datetime import datetime
 
+# Suppress pandas 2.x FutureWarning about read_json with literal strings.
+# Our code already uses io.StringIO; the warning fires from Airflow's task
+# subprocess reimporting the module at a different stack depth.
+warnings.filterwarnings(
+    "ignore",
+    message=".*Passing literal json.*",
+    category=FutureWarning,
+)
+
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
@@ -24,12 +33,14 @@ DATA_PATH = str(
 @dag(
     dag_id="iris_pipeline",
     start_date=datetime(2024, 1, 1),
-    schedule=None,
+    schedule=None,       # manual trigger only
     catchup=False,
     tags=["iris", "demo"],
     doc_md="""
     ## Iris ML Pipeline
-    End-to-end pipeline: load_data -> validate_data -> featurize -> train_model -> evaluate
+
+    End-to-end pipeline for the iris dataset:
+    `load_data → validate_data → featurize → train_model → evaluate`
     """,
 )
 def iris_pipeline():
@@ -45,13 +56,17 @@ def iris_pipeline():
     def validate_data(raw_json: str) -> str:
         """Assert schema, nulls, and numeric ranges. Raises on failure."""
         df = pd.read_json(io.StringIO(raw_json), orient="records")
+
         expected_cols = {"septal_length", "sepal_width",
                          "petal_length", "petal_width", "class"}
         missing = expected_cols - set(df.columns)
         assert not missing, f"Missing columns: {missing}"
         assert df.isnull().sum().sum() == 0, "Null values detected"
-        assert df["septal_length"].between(0, 20).all()
-        assert df["sepal_width"].between(0, 20).all()
+        assert df["septal_length"].between(0, 20).all(), \
+            "septal_length contains out-of-range values"
+        assert df["sepal_width"].between(0, 20).all(), \
+            "sepal_width contains out-of-range values"
+
         print(
             f"Validation passed | {len(df)} rows | "
             f"{df['class'].nunique()} classes: {df['class'].unique().tolist()}"
@@ -82,7 +97,10 @@ def iris_pipeline():
         model = LogisticRegression(max_iter=300, random_state=42)
         model.fit(X_train, y_train)
         preds = model.predict(X_test).tolist()
-        print(f"Trained on {len(X_train)} samples | Test set size: {len(X_test)}")
+        print(
+            f"Trained on {len(X_train)} samples | "
+            f"Test set size: {len(X_test)}"
+        )
         return {
             "y_test": y_test.tolist(),
             "preds": preds,
@@ -104,6 +122,7 @@ def iris_pipeline():
         print(report)
         return float(acc)
 
+    # ── Wire tasks together (defines the DAG edges) ────────────────────────────
     raw    = load_data()
     valid  = validate_data(raw)
     feats  = featurize(valid)
@@ -111,4 +130,4 @@ def iris_pipeline():
     evaluate(result)
 
 
-iris_pipeline()
+iris_pipeline()   # instantiate — Airflow scans for this at module level

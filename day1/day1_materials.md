@@ -341,8 +341,11 @@ Models are functions of **data + code + config**. If data changes silently, resu
 | Approach | Tool | How it versions | Pros | Cons | Best when |
 |----------|------|-----------------|------|------|-----------|
 | Snapshots in object storage | S3/GCS versioning, timestamped paths | Keeps a copy of each object version (by version ID or path) | Zero extra tooling; works with any file type; cheap | No diffing, no branches, no "why" metadata; retention is manual; hard to map runs → snapshots | You just need a quick, auditable copy of each dataset and have few experiments |
+
 | Git-like data versioning | **DVC**, LakeFS | Content-addressed hashes; a small pointer is committed to git while bytes live in a remote | Ties data version to the exact git commit; diffs, branches, `pull`/`push` workflow; reproducible by clone + one command | Extra CLI to install and learn; large-file rewrites are costly; `dvc pull` is separate from `git pull` | You want code and data versioned together with a familiar git mental model |
+
 | Data warehouse time travel | Snowflake, BigQuery, Delta Lake / Iceberg | Engine retains table history; query "as of" a timestamp or version | No extra tooling if you're already on the platform; query any historical state in SQL | Vendor-coupled syntax; retention window can expire (Snowflake Standard = 1 day); still must log which snapshot a run used | Your training data already lives in a warehouse/lakehouse and you query it with SQL |
+
 | Feature stores | Feast, Tecton | Versioned feature definitions + point-in-time correct joins | Eliminates train/serve skew; reuse features across models; consistent offline/online values | Highest operational cost; overkill for small projects | Multiple models share features, or you need low-latency online serving |
 
 > **How to choose:** move down the table as your needs grow. Most projects start with **object-storage snapshots** (or DVC), graduate to **warehouse time travel** once data lives centrally, and only reach for a **feature store** when feature reuse or online latency forces it. These approaches also compose — e.g. DVC for raw-file versioning *plus* a feature store for serving.
