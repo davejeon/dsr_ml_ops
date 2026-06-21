@@ -73,14 +73,17 @@ app = FastAPI(
 # ── Request / response schemas ────────────────────────────────────────────────
 
 class IrisFeatures(BaseModel):
-    septal_length: float = Field(..., gt=0, le=20, example=5.1,
-                                  description="Sepal length in cm")
-    sepal_width:   float = Field(..., gt=0, le=20, example=3.5,
-                                  description="Sepal width in cm")
-    petal_length:  float = Field(..., gt=0, le=20, example=1.4,
-                                  description="Petal length in cm")
-    petal_width:   float = Field(..., gt=0, le=20, example=0.2,
-                                  description="Petal width in cm")
+    model_config = {"json_schema_extra": {"example": {
+        "septal_length": 5.1,
+        "sepal_width":   3.5,
+        "petal_length":  1.4,
+        "petal_width":   0.2,
+    }}}
+
+    septal_length: float = Field(..., gt=0, le=20, description="Sepal length in cm")
+    sepal_width:   float = Field(..., gt=0, le=20, description="Sepal width in cm")
+    petal_length:  float = Field(..., gt=0, le=20, description="Petal length in cm")
+    petal_width:   float = Field(..., gt=0, le=20, description="Petal width in cm")
 
 
 class PredictionResponse(BaseModel):
