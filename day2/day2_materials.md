@@ -168,6 +168,222 @@ mlflow models serve -m "runs:/<run_id>/model" --port 5001
 
 When a model is promoted in the Model Registry (Staging → Production), the signature is compared against the previous version. If the input schema changed (e.g. a column was renamed or its type changed), the registry can flag the incompatibility before it reaches production and breaks a downstream service.
 
+#### Signatures and metadata beyond MLflow
+
+The pattern — declare types at save time, validate at load/serve time, inspect for governance — is not MLflow-specific. It appears across the ML ecosystem in different forms.
+
+---
+
+##### ONNX
+
+Every `.onnx` file embeds typed input/output tensor specs directly in the binary. The ONNX runtime reads them before any inference and rejects mismatched inputs.
+
+```python
+import onnxruntime as rt
+
+sess = rt.InferenceSession("model.onnx")
+
+# Inspect the signature embedded in the file
+for inp in sess.get_inputs():
+    print(inp.name, inp.type, inp.shape)
+# → age   tensor(int64)   [None, 1]
+# → income tensor(float)  [None, 1]
+
+# Runtime enforces types: passing a string raises OrtInvalidArgument
+scores = sess.run(None, {"age": age_array.astype("int64"),
+                          "income": income_array.astype("float32")})[0]
+```
+
+Converting from sklearn to ONNX also forces you to declare types explicitly, which catches train/serve skew at export time rather than at runtime:
+
+```python
+from skl2onnx import convert_sklearn
+from skl2onnx.common.data_types import Int64TensorType, DoubleTensorType
+
+# The type annotation here IS the signature
+onnx_model = convert_sklearn(
+    model, "churn",
+    initial_types=[
+        ("age",    Int64TensorType([None, 1])),
+        ("income", DoubleTensorType([None, 1])),
+    ]
+)
+```
+
+---
+
+##### TensorFlow SavedModel
+
+A TensorFlow `SavedModel` stores named *serving signatures* inside `saved_model.pb`. TF Serving reads these at startup and uses them to route and validate incoming HTTP/gRPC requests.
+
+```python
+import tensorflow as tf
+
+# At save time: attach a named signature with typed inputs/outputs
+@tf.function(input_signature=[
+    tf.TensorSpec(shape=[None], dtype=tf.int64,   name="age"),
+    tf.TensorSpec(shape=[None], dtype=tf.float32, name="income"),
+])
+def serve(age, income):
+    return {"prob": model([age, income])}
+
+tf.saved_model.save(model, "saved_model/", signatures={"serving_default": serve})
+```
+
+```bash
+# Inspect the signature without loading the model
+saved_model_cli show --dir saved_model/ --tag_set serve --signature_def serving_default
+# → The given SavedModel SignatureDef contains the following input(s):
+#   inputs['age']    tensor_info: dtype: DT_INT64, shape: (-1)
+#   inputs['income'] tensor_info: dtype: DT_FLOAT,  shape: (-1)
+# → The given SavedModel SignatureDef contains the following output(s):
+#   outputs['prob']  tensor_info: dtype: DT_FLOAT,  shape: (-1)
+```
+
+TF Serving rejects requests that don't match these specs with a clear gRPC or HTTP 400 error — the same guarantee MLflow's signature enforcement provides.
+
+---
+
+##### Triton Inference Server
+
+NVIDIA's Triton Inference Server uses a `config.pbtxt` file per model. This file is the "signature" for Triton: it declares input/output names, dtypes, and shapes and Triton enforces it at the HTTP/gRPC layer before the request reaches any backend.
+
+```protobuf
+# models/churn/config.pbtxt
+name: "churn"
+backend: "onnxruntime"
+
+input [
+  { name: "age"    data_type: TYPE_INT64  dims: [ -1, 1 ] },
+  { name: "income" data_type: TYPE_FP32   dims: [ -1, 1 ] }
+]
+output [
+  { name: "prob"   data_type: TYPE_FP32   dims: [ -1, 1 ] }
+]
+
+# Triton batches requests automatically up to this size
+dynamic_batching { max_queue_delay_microseconds: 100 }
+```
+
+A request with a wrong dtype or unexpected field name returns an error before any GPU compute is used — which matters when GPU time is expensive.
+
+---
+
+##### BentoML
+
+BentoML uses Python type annotations and `pydantic` schemas as the service signature. Unlike MLflow, the signature lives in code rather than in a YAML file, which makes it easier to version alongside the model logic.
+
+```python
+import bentoml
+from bentoml.io import NumpyNdarray, PandasDataFrame
+
+# The input/output specs ARE the signature — checked at every /predict call
+svc = bentoml.Service("churn_svc", runners=[runner])
+
+@svc.api(input=PandasDataFrame(), output=NumpyNdarray())
+def predict(df: pd.DataFrame) -> np.ndarray:
+    return runner.predict.run(df)
+```
+
+BentoML generates an OpenAPI spec from these annotations automatically, so the signature also drives the interactive API docs (`/docs`).
+
+---
+
+##### PMML — a portable, governance-focused signature format
+
+**PMML (Predictive Model Markup Language)** is an XML standard for exporting models across tools. Unlike the formats above, it is not primarily a runtime enforcement mechanism — it is an *interchange and governance format*. The schema is part of the file, but the purpose is auditability and portability.
+
+```xml
+<!-- churn_model.pmml — readable by SAS, IBM, Spark MLlib, and others -->
+<PMML version="4.4" xmlns="http://www.dmg.org/PMML-4_4">
+  <Header copyright="DSR 2024"/>
+  <DataDictionary numberOfFields="3">
+    <DataField name="age"    optype="continuous" dataType="integer"/>
+    <DataField name="income" optype="continuous" dataType="double"/>
+    <DataField name="prob"   optype="continuous" dataType="double" usage="predicted"/>
+  </DataDictionary>
+  <!-- model weights, tree structure, or regression coefficients follow -->
+</PMML>
+```
+
+PMML is common in financial services and insurance where:
+- Regulators demand that models be interpretable in a vendor-neutral format.
+- The scoring engine is not Python (e.g. a bank's SAS or COBOL-based production system).
+- Audit trails require that the exact model specification, not just weights, be stored and versioned.
+
+```python
+# Export from sklearn → PMML (via sklearn2pmml)
+from sklearn2pmml import sklearn2pmml
+from sklearn2pmml.pipeline import PMMLPipeline
+
+pipeline = PMMLPipeline([("classifier", model)])
+pipeline.fit(X_train, y_train)
+sklearn2pmml(pipeline, "churn_model.pmml")
+```
+
+---
+
+##### Model Cards and Hugging Face `config.json` — metadata for governance
+
+**Model Cards** (developed by Google, adopted by Hugging Face) are structured metadata documents attached to model artifacts. They do not enforce runtime types — their role is *human and organisational governance*: who built this, what data it was trained on, what it should and should not be used for, and how it performs across demographic groups.
+
+A minimal model card:
+
+```markdown
+## Model Card — Churn Classifier v2
+
+**Intended use:** predict 30-day churn probability for consumer accounts.
+**Out-of-scope uses:** not validated for business accounts or non-EU markets.
+
+**Training data:** anonymised transaction logs 2021–2023. No special category data.
+**Evaluation:** AUC 0.91 on holdout. AUC by age group: 18–30 → 0.89, 31–60 → 0.93, 60+ → 0.87.
+
+**Known limitations:** performance degrades for accounts < 3 months old (sparse features).
+**Owner:** @alice  |  **Approved by:** @head-of-risk  |  **Review date:** 2025-01-01
+```
+
+The EU AI Act (2024) makes model cards or equivalent documentation mandatory for high-risk AI systems.
+
+**Hugging Face `config.json`** is the metadata manifest for transformer models. It records architecture choices (number of layers, attention heads, vocabulary size, tokenizer class) that the `transformers` library reads to reconstruct the model class automatically — similar to how MLflow's `MLmodel` records the flavor and serialization format.
+
+```json
+{
+  "architectures": ["BertForSequenceClassification"],
+  "hidden_size": 768,
+  "num_attention_heads": 12,
+  "num_hidden_layers": 12,
+  "num_labels": 2,
+  "id2label": {"0": "not_churn", "1": "churn"},
+  "model_type": "bert"
+}
+```
+
+```python
+# transformers reads config.json to know which class to instantiate
+from transformers import AutoModelForSequenceClassification
+model = AutoModelForSequenceClassification.from_pretrained("my-churn-bert/")
+# → no need to specify BertForSequenceClassification manually
+```
+
+---
+
+##### How these fit together
+
+| Format / tool | Primary role | Runtime enforcement? | Governance use? |
+|---------------|-------------|---------------------|----------------|
+| **MLflow `MLmodel`** | Experiment tracking + serving | Yes — rejects bad inputs | Partial (registry) |
+| **ONNX** | Cross-framework portability + inference | Yes — type checked by runtime | No |
+| **TF SavedModel** | TensorFlow production serving | Yes — TF Serving enforces | No |
+| **Triton `config.pbtxt`** | GPU inference server | Yes — enforced at HTTP/gRPC layer | No |
+| **BentoML service spec** | Python-native serving | Yes — Pydantic validation | Partial (OpenAPI docs) |
+| **PMML** | Vendor-neutral interchange | Depends on scoring engine | Yes — audit/compliance |
+| **Model Cards** | Governance and communication | No | Yes — primary purpose |
+| **HuggingFace `config.json`** | Model reconstruction | Partial (class selection) | Partial |
+
+The key distinction: **runtime enforcement** (ONNX, TF SavedModel, MLflow, Triton) and **governance metadata** (PMML, Model Cards) are complementary, not alternatives. A production system typically needs both: the serving layer rejects malformed requests, and the governance layer answers "who approved this model and on what data?"
+
+---
+
 #### Summary
 
 | When | What happens |
@@ -227,20 +443,16 @@ df[["customer_id", "score"]].to_sql("scores", engine, if_exists="append", index=
 
 The model is wrapped in an HTTP server that another service can call synchronously. The caller sends features in the request body and gets a prediction back in the response, typically within tens of milliseconds.
 
-```
- Client / app
-      │
-      │  POST /predict  {"age": 35, "income": 52000}
-      ▼
- ┌─────────────┐
- │  API server │  ← FastAPI / Flask / BentoML / TorchServe / Triton
- │  (model     │
- │   loaded    │
- │   in memory)│
- └──────┬──────┘
-        │  {"probability": 0.83}
-        ▼
-      Client
+```mermaid
+sequenceDiagram
+    participant C as Client / app
+    participant A as API server<br/>(FastAPI / Flask / BentoML / TorchServe / Triton)
+    participant M as Model<br/>(loaded in memory)
+
+    C->>A: POST /predict {"age": 35, "income": 52000}
+    A->>M: model.predict(features)
+    M-->>A: raw score
+    A-->>C: HTTP 200 {"probability": 0.83}
 ```
 
 **Typical setup (FastAPI — see 5.4 for full example):**
@@ -363,20 +575,20 @@ scores = sess.run(None, {input_name: X_new.astype("float32")})[0]
 
 #### Choosing a pattern
 
-```
-Does the consumer need the score  ──Yes──▶  Is the consumer        ──Yes──▶  Embedded
-before the next network round-trip?          on-device / offline?
-      │                                              │
-      No                                             No
-      │                                              │
-      ▼                                              ▼
-Is the score needed within       ──Yes──▶  Is there a message      ──Yes──▶  Streaming
-seconds of the event occurring?            queue already in place?
-      │                                              │
-      No                                             No
-      │                                              │
-      ▼                                              ▼
-   Batch                                        Online REST
+```mermaid
+flowchart TD
+    A{"Does the consumer need the score\nbefore the next network round-trip?"}
+    A -- Yes --> B{"Is the consumer\non-device / offline?"}
+    A -- No  --> C{"Is the score needed within\nseconds of the event occurring?"}
+
+    B -- Yes --> Embedded
+    B -- No  --> D{"Is there a message\nqueue already in place?"}
+
+    C -- Yes --> D
+    C -- No  --> Batch
+
+    D -- Yes --> Streaming
+    D -- No  --> OnlineREST["Online REST"]
 ```
 
 ### 5.4 A minimal online service (FastAPI)
